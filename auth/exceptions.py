@@ -17,3 +17,8 @@ class UserAlreadyHaveSession(Exception):
     def __init__(self, user_id=None):
         msg = f'User {user_id} already have session'
         super().__init__(msg)
+
+class SessionDontExists(Exception):
+    def __init__(self, user_id=None):
+        msg = f'Session for user {user_id} dont exists'
+        super().__init__(msg)

@@ -7,9 +7,8 @@ class Registrator:
         self.user_reader = user_reader
         self.hash_maker = hash_maker
 
-    def registrate_user(self, user_model: User):
-        if self.user_reader.get_record_by(name=user_model.name):
+    async def registrate_user(self, user_model: User):
+        if await self.user_reader.get_record_by(name=user_model.name):
             raise UserAlreadyExists
         hash_psw = self.hash_maker.make_hash(user_model.password)
-        self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)
-        return True
+        await self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)

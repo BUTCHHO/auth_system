@@ -1,6 +1,3 @@
-from .exceptions import UserAlreadyHaveSession
-
-
 class SessionMaker:
     def __init__(self, session_reader, session_actor, time_handler, hasher, cacher, SESSION_EXPIRE_DAYS):
         self.session_reader = session_reader
@@ -10,12 +7,19 @@ class SessionMaker:
         self.time_handler = time_handler
         self.SESSION_EXPIRE_DAYS = SESSION_EXPIRE_DAYS
 
-    def make_session_and_save(self, user_id):
-        if self.session_reader.get_by_kwargs(user_id=user_id):
-            raise UserAlreadyHaveSession(user_id)
+    async def _delete_session_if_already_exists(self, user_id):
+        if session := await self.session_reader.get_by_kwargs(user_id=user_id):
+            self.cacher.delete_data(session.id)
+            await self.session_actor.delete_record_by_kwargs(user_id=user_id)
+
+    def _make_session_obj(self):
         session_id = self.hasher.make_urlsafe_hash()
         session_expire_date = self.time_handler.add_days_to_current_date(self.SESSION_EXPIRE_DAYS)
-        session = self.session_actor.create_record(id=session_id, user_id=session_id, expire_date=session_expire_date)
-        self.session_actor.write_record_to_db(session)
-        self.cacher.put_data(session_id, user_id)
+        return self.session_actor.create_record(id=session_id, user_id=session_id, expire_date=session_expire_date)
+
+    async def make_session_and_save(self, user_id):
+        await self._delete_session_if_already_exists(user_id)
+        session = self._make_session_obj()
+        await self.session_actor.write_record_to_db(session)
+        self.cacher.put_data(session.id, user_id)
         return session
