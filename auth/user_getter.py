@@ -18,7 +18,7 @@ class UserGetter:
             raise UserDontExists(user_id)
         return user
 
-    def get_by_name(self, name):
+    async def get_by_name(self, name):
         user = await self.user_reader.get_by_kwargs(name=name)
         if not user:
             raise UserDontExists()
