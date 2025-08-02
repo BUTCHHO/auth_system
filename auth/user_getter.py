@@ -9,7 +9,7 @@ class UserGetter:
     async def get_by_session_id(self, session_id):
         user_id = self.cache_client.get_data(session_id)
         if user_id is not None:
-            await user = self.user_reader.get_by_kwargs(id=user_id)
+            user = await self.user_reader.get_by_kwargs(id=user_id)
             if not user:
                 raise UserDontExists(user_id)
             return user
@@ -19,7 +19,7 @@ class UserGetter:
         return user
 
     def get_by_name(self, name):
-        user = self.user_reader.get_by_kwargs(name=name)
+        user = await self.user_reader.get_by_kwargs(name=name)
         if not user:
             raise UserDontExists()
         return user
