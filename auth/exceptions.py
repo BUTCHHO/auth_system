@@ -12,3 +12,8 @@ class InvalidPassword(Exception):
     def __init__(self, password=None):
         msg = f'Wrong password {password}'
         super().__init__(msg)
+
+class UserAlreadyHaveSession(Exception):
+    def __init__(self, user_id=None):
+        msg = f'User {user_id} already have session'
+        super().__init__(msg)

@@ -18,5 +18,5 @@ class Authenticator:
             raise UserDontExists
         if not self.hasher.compare_password_hashes(psw, user.password):
             raise InvalidPassword
-        session = self.session_maker.make_session_for_user_and_save(user)
+        session = self.session_maker.make_session_and_save(user.id)
         return session
