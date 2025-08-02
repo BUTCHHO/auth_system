@@ -1,3 +1,30 @@
+import pytest
+from auth.registration import Registrator
+from auth.pydantic_models import User
+from auth.exceptions import UserAlreadyExists
+
+def get_mocks(mocker):
+    user_actor = mocker.Mock()
+    user_reader = mocker.Mock()
+    hasher = mocker.Mock()
+    return user_actor, user_reader, hasher
+
+def test_registrate_user_success(mocker):
+    user = User(name='tester', password='password')
+    user_actor, user_reader, hasher = get_mocks(mocker)
+    user_reader.get_record_by.return_value = None
+    hasher.make_hash.return_value = 'super_long_hash'
+    registrator = Registrator(user_actor, user_reader, hasher)
+    result = registrator.registrate_user(user)
+    assert result is True
+
+def test_registrate_user_already_exists(mocker):
+    user = User(name='tester_who_already_exists', password='123')
+    user_actor, user_reader, hasher = get_mocks(mocker)
+    user_reader.get_record_by.return_value = 'not none'
+    registrator = Registrator(user_actor, user_reader, hasher)
+    with pytest.raises(UserAlreadyExists):
+        registrator.registrate_user(user)
 from .exceptions import UserDontExists
 
 class UserGetter:
@@ -48,8 +75,29 @@ class Authenticator:
             raise UserDontExists
         if not self.hasher.compare_password_hashes(psw, user.password):
             raise InvalidPassword
-        session = self.session_maker.make_session_for_user_and_save(user)
-        return sessionfrom .pydantic_models import User
+        session = self.session_maker.make_session_and_save(user.id)
+        return sessionfrom .exceptions import UserAlreadyHaveSession
+
+
+class SessionMaker:
+    def __init__(self, session_reader, session_actor, time_handler, hasher, cacher, SESSION_EXPIRE_DAYS):
+        self.session_reader = session_reader
+        self.session_actor = session_actor
+        self.hasher = hasher
+        self.cacher = cacher
+        self.time_handler = time_handler
+        self.SESSION_EXPIRE_DAYS = SESSION_EXPIRE_DAYS
+
+    def make_session_and_save(self, user_id):
+        if self.session_reader.get_by_kwargs(user_id=user_id):
+            raise UserAlreadyHaveSession(user_id)
+        session_id = self.hasher.make_urlsafe_hash()
+        session_expire_date = self.time_handler.add_days_to_current_date(self.SESSION_EXPIRE_DAYS)
+        session = self.session_actor.create_record(id=session_id, user_id=session_id, expire_date=session_expire_date)
+        self.session_actor.write_record_to_db(session)
+        self.cacher.put_data(session_id, user_id)
+        return session
+from .pydantic_models import User
 from .exceptions import UserAlreadyExists
 
 class Registrator:
@@ -63,6 +111,7 @@ class Registrator:
             raise UserAlreadyExists
         hash_psw = self.hash_maker.make_hash(user_model.password)
         self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)
+        return True
 class UserAlreadyExists(Exception):
     def __init__(self, name=''):
         msg = f'User {name} already exists'
@@ -76,4 +125,9 @@ class UserDontExists(Exception):
 class InvalidPassword(Exception):
     def __init__(self, password=None):
         msg = f'Wrong password {password}'
+        super().__init__(msg)
+
+class UserAlreadyHaveSession(Exception):
+    def __init__(self, user_id=None):
+        msg = f'User {user_id} already have session'
         super().__init__(msg)

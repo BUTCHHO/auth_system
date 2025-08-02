@@ -12,3 +12,4 @@ class Registrator:
             raise UserAlreadyExists
         hash_psw = self.hash_maker.make_hash(user_model.password)
         self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)
+        return True
