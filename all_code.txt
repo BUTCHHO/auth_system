@@ -55,20 +55,20 @@ class UserGetter:
         self.session_reader = session_reader
         self.cache_client = cache_client
 
-    def get_by_session_id(self, session_id):
+    async def get_by_session_id(self, session_id):
         user_id = self.cache_client.get_data(session_id)
         if user_id is not None:
-            user = self.user_reader.get_by_kwargs(id=user_id)
+            user = await self.user_reader.get_by_kwargs(id=user_id)
             if not user:
                 raise UserDontExists(user_id)
             return user
-        user = self.user_reader.get_by_kwargs(session_id=session_id)
+        user = await self.user_reader.get_by_kwargs(session_id=session_id)
         if not user:
             raise UserDontExists(user_id)
         return user
 
-    def get_by_name(self, name):
-        user = self.user_reader.get_by_kwargs(name=name)
+    async def get_by_name(self, name):
+        user = await self.user_reader.get_by_kwargs(name=name)
         if not user:
             raise UserDontExists()
         return userfrom pydantic import BaseModel
@@ -78,31 +78,47 @@ class User(BaseModel):
     name: str
     password: str
 
-from .pydantic_models import User
 from .exceptions import InvalidPassword, UserDontExists
 
 
 class Authenticator:
-    def __init__(self, user_getter, hasher, session_maker):
+    def __init__(self, user_getter, hasher, session_maker, session_reader, cacher):
         self.user_getter = user_getter
         self.hasher = hasher
         self.session_maker = session_maker
+        self.session_reader = session_reader
+        self.cacher = cacher
+
+    async def auth_by_session_id(self, session_id):
+        return await self.user_getter.get_by_session_id(session_id)
 
 
-    def auth_by_session_id(self, session_id):
-        return self.user_getter.get_by_session_id(session_id)
-
-    def auth_by_name_and_psw_and_return_session(self, name, psw):
-        user = self.user_getter.get_by_name(name)
+    async def auth_by_name_and_psw_and_return_session(self, name, psw):
+        user = await self.user_getter.get_by_name(name)
         if user is None:
             raise UserDontExists
         if not self.hasher.compare_password_hashes(psw, user.password):
             raise InvalidPassword
-        session = self.session_maker.make_session_and_save(user.id)
-        return sessionfrom .exceptions import UserAlreadyHaveSession
+        session = await self.session_maker.make_session_and_save(user.id)
+        return sessionfrom .exceptions import SessionDontExists
 
 
-class SessionMaker:
+class Logouter:
+    def __init__(self, user_reader, session_reader, session_actor, cacher):
+        self.user_reader = user_reader
+        self.session_reader = session_reader
+        self.session_actor = session_actor
+        self.cacher = cacher
+
+    async def delete_session_for_user(self, user_id):
+        """
+        :raises: SessionDontExists
+        """
+        session = await self.session_reader.get_by_kwargs(user_id=user_id)
+        if session is None:
+            raise SessionDontExists
+        await self.session_actor.delete_record_by_kwargs(id=session.id)
+        self.cacher.delete_data(session.id)class SessionMaker:
     def __init__(self, session_reader, session_actor, time_handler, hasher, cacher, SESSION_EXPIRE_DAYS):
         self.session_reader = session_reader
         self.session_actor = session_actor
@@ -111,14 +127,21 @@ class SessionMaker:
         self.time_handler = time_handler
         self.SESSION_EXPIRE_DAYS = SESSION_EXPIRE_DAYS
 
-    def make_session_and_save(self, user_id):
-        if self.session_reader.get_by_kwargs(user_id=user_id):
-            raise UserAlreadyHaveSession(user_id)
+    async def _delete_session_if_already_exists(self, user_id):
+        if session := await self.session_reader.get_by_kwargs(user_id=user_id):
+            self.cacher.delete_data(session.id)
+            await self.session_actor.delete_record_by_kwargs(user_id=user_id)
+
+    def _make_session_obj(self):
         session_id = self.hasher.make_urlsafe_hash()
         session_expire_date = self.time_handler.add_days_to_current_date(self.SESSION_EXPIRE_DAYS)
-        session = self.session_actor.create_record(id=session_id, user_id=session_id, expire_date=session_expire_date)
-        self.session_actor.write_record_to_db(session)
-        self.cacher.put_data(session_id, user_id)
+        return self.session_actor.create_record(id=session_id, user_id=session_id, expire_date=session_expire_date)
+
+    async def make_session_and_save(self, user_id):
+        await self._delete_session_if_already_exists(user_id)
+        session = self._make_session_obj()
+        await self.session_actor.write_record_to_db(session)
+        self.cacher.put_data(session.id, user_id)
         return session
 from .pydantic_models import User
 from .exceptions import UserAlreadyExists
@@ -129,12 +152,11 @@ class Registrator:
         self.user_reader = user_reader
         self.hash_maker = hash_maker
 
-    def registrate_user(self, user_model: User):
-        if self.user_reader.get_record_by(name=user_model.name):
+    async def registrate_user(self, user_model: User):
+        if await self.user_reader.get_record_by(name=user_model.name):
             raise UserAlreadyExists
         hash_psw = self.hash_maker.make_hash(user_model.password)
-        self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)
-        return True
+        await self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)
 class UserAlreadyExists(Exception):
     def __init__(self, name=''):
         msg = f'User {name} already exists'
@@ -153,4 +175,9 @@ class InvalidPassword(Exception):
 class UserAlreadyHaveSession(Exception):
     def __init__(self, user_id=None):
         msg = f'User {user_id} already have session'
+        super().__init__(msg)
+
+class SessionDontExists(Exception):
+    def __init__(self, user_id=None):
+        msg = f'Session for user {user_id} dont exists'
         super().__init__(msg)

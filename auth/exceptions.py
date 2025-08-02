@@ -22,3 +22,8 @@ class SessionDontExists(Exception):
     def __init__(self, user_id=None):
         msg = f'Session for user {user_id} dont exists'
         super().__init__(msg)
+
+class SesssionExpired(Exception):
+    def __init__(self, ses_id=None):
+        msg = f'Session {ses_id} dont exists'
+        super().__init__(msg)
