@@ -1,8 +1,55 @@
-from pydantic import BaseModel
+from .exceptions import UserDontExists
 
-class NewUser(BaseModel):
+class UserGetter:
+    def __init__(self, user_reader, session_reader, cache_client):
+        self.user_reader = user_reader
+        self.session_reader = session_reader
+        self.cache_client = cache_client
+
+    def get_by_session_id(self, session_id):
+        user_id = self.cache_client.get_data(session_id)
+        if user_id is not None:
+            user = self.user_reader.get_by_kwargs(id=user_id)
+            if not user:
+                raise UserDontExists(user_id)
+            return user
+        user = self.user_reader.get_by_kwargs(session_id=session_id)
+        if not user:
+            raise UserDontExists(user_id)
+        return user
+
+    def get_by_name(self, name):
+        user = self.user_reader.get_by_kwargs(name=name)
+        if not user:
+            raise UserDontExists()
+        return userfrom pydantic import BaseModel
+
+class User(BaseModel):
     name: str
-    password: strfrom .pydantic_models import NewUser
+    password: str
+
+from .pydantic_models import User
+from .exceptions import InvalidPassword, UserDontExists
+
+
+class Authenticator:
+    def __init__(self, user_getter, hasher, session_maker):
+        self.user_getter = user_getter
+        self.hasher = hasher
+        self.session_maker = session_maker
+
+
+    def auth_by_session_id(self, session_id):
+        return self.user_getter.get_by_session_id(session_id)
+
+    def auth_by_name_and_psw_and_return_session(self, name, psw):
+        user = self.user_getter.get_by_name(name)
+        if user is None:
+            raise UserDontExists
+        if not self.hasher.compare_password_hashes(psw, user.password):
+            raise InvalidPassword
+        session = self.session_maker.make_session_for_user_and_save(user)
+        return sessionfrom .pydantic_models import User
 from .exceptions import UserAlreadyExists
 
 class Registrator:
@@ -11,7 +58,7 @@ class Registrator:
         self.user_reader = user_reader
         self.hash_maker = hash_maker
 
-    def registrate_user(self, user_model: NewUser):
+    def registrate_user(self, user_model: User):
         if self.user_reader.get_record_by(name=user_model.name):
             raise UserAlreadyExists
         hash_psw = self.hash_maker.make_hash(user_model.password)
@@ -19,4 +66,14 @@ class Registrator:
 class UserAlreadyExists(Exception):
     def __init__(self, name=''):
         msg = f'User {name} already exists'
+        super().__init__(msg)
+
+class UserDontExists(Exception):
+    def __init__(self, id=None):
+        msg = f'User with id {id} dont exists'
+        super().__init__(msg)
+
+class InvalidPassword(Exception):
+    def __init__(self, password=None):
+        msg = f'Wrong password {password}'
         super().__init__(msg)
