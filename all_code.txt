@@ -4,68 +4,88 @@ from auth.pydantic_models import User
 from auth.exceptions import UserAlreadyExists
 
 def get_mocks(mocker):
-    user_actor = mocker.Mock()
-    user_reader = mocker.Mock()
+    user_actor = mocker.AsyncMock()
+    user_reader = mocker.AsyncMock()
     hasher = mocker.Mock()
     return user_actor, user_reader, hasher
 
-def test_registrate_user_success(mocker):
+@pytest.mark.asyncio
+async def test_registrate_user_success(mocker):
     user = User(name='tester', password='password')
     user_actor, user_reader, hasher = get_mocks(mocker)
     user_reader.get_record_by.return_value = None
     hasher.make_hash.return_value = 'super_long_hash'
     registrator = Registrator(user_actor, user_reader, hasher)
-    result = registrator.registrate_user(user)
+    result = await registrator.registrate_user(user)
     assert result is True
 
-def test_registrate_user_already_exists(mocker):
+@pytest.mark.asyncio
+async def test_registrate_user_already_exists(mocker):
     user = User(name='tester_who_already_exists', password='123')
     user_actor, user_reader, hasher = get_mocks(mocker)
     user_reader.get_record_by.return_value = 'not none'
     registrator = Registrator(user_actor, user_reader, hasher)
     with pytest.raises(UserAlreadyExists):
-        registrator.registrate_user(user)
-import pytest
-from django.contrib.auth import authenticate
+        await registrator.registrate_user(user)import pytest
+import asyncio
 
 from auth.pydantic_models import User
 from auth.authentication import Authenticator
 
+
 def get_mocks(mocker):
-    user_getter = mocker.Mock()
+    user_getter = mocker.AsyncMock()
     hasher = mocker.Mock()
-    session_maker = mocker.Mock()
-    return user_getter, hasher, session_maker
+    session_maker = mocker.AsyncMock()
+    session_reader = mocker.AsyncMock()
+    cacher = mocker.Mock()
+    return user_getter, hasher, session_maker, session_reader, cacher
 
 
-def test_auth_by_name_and_psw_and_return_session_success(mocker):
+@pytest.mark.asyncio
+async def test_auth_by_name_and_psw_and_return_session_success(mocker):
     user = User(id=333, name='tester', password='super_long_hash')
-    user_getter, hasher, session_maker = get_mocks(mocker)
+    user_getter, hasher, session_maker, session_reader, cacher = get_mocks(mocker)
     user_getter.get_by_name.return_value = user
     hasher.compare_password_hashes.return_value = True
     session_maker.make_session_and_save.return_value = True
-    authenticator = Authenticator(user_getter, hasher, session_maker)
-    result = authenticator.auth_by_name_and_psw_and_return_session(user.name, user.password)
+    authenticator = Authenticator(user_getter, hasher, session_maker, session_reader, cacher)
+    result = await authenticator.auth_by_name_and_psw_and_return_session(user.name, user.password)
     assert result is True
-from .exceptions import UserDontExists
+from .exceptions import UserDontExists, SessionDontExists, SesssionExpired
+
 
 class UserGetter:
-    def __init__(self, user_reader, session_reader, cache_client):
+    def __init__(self, user_reader, session_reader, cacher, time_handler):
         self.user_reader = user_reader
         self.session_reader = session_reader
-        self.cache_client = cache_client
+        self.cacher = cacher
+        self.time_handler = time_handler
 
     async def get_by_session_id(self, session_id):
-        user_id = self.cache_client.get_data(session_id)
+        user_id = self.cacher.get_data(session_id)
         if user_id is not None:
-            user = await self.user_reader.get_by_kwargs(id=user_id)
-            if not user:
-                raise UserDontExists(user_id)
-            return user
+            return self.get_user_if_in_cache(user_id)
+        session = self.session_reader.get_by_kwargs(id=session_id)
+        await self._raise_and_delete_session_if_invalid(session)
         user = await self.user_reader.get_by_kwargs(session_id=session_id)
         if not user:
             raise UserDontExists(user_id)
         return user
+
+    async def get_user_if_in_cache(self, user_id):
+        user = await self.user_reader.get_by_kwargs(id=user_id)
+        if not user:
+            raise UserDontExists(user_id)
+        return user
+
+    async def _raise_and_delete_session_if_invalid(self, session):
+        if not session:
+            raise SessionDontExists
+        if not self.time_handler.is_date_future(session.expire_date):
+            self.cacher.delete_data(session.id)
+            await self.session_reader.delete_by_kwargs(id=session.id)
+            raise SesssionExpired(session.id)
 
     async def get_by_name(self, name):
         user = await self.user_reader.get_by_kwargs(name=name)
@@ -157,7 +177,7 @@ class Registrator:
             raise UserAlreadyExists
         hash_psw = self.hash_maker.make_hash(user_model.password)
         await self.user_actor.make_record_and_write(name=user_model.name, password=hash_psw)
-class UserAlreadyExists(Exception):
+        return Trueclass UserAlreadyExists(Exception):
     def __init__(self, name=''):
         msg = f'User {name} already exists'
         super().__init__(msg)
@@ -180,4 +200,9 @@ class UserAlreadyHaveSession(Exception):
 class SessionDontExists(Exception):
     def __init__(self, user_id=None):
         msg = f'Session for user {user_id} dont exists'
+        super().__init__(msg)
+
+class SesssionExpired(Exception):
+    def __init__(self, ses_id=None):
+        msg = f'Session {ses_id} dont exists'
         super().__init__(msg)
